@@ -220,6 +220,9 @@ class AuroraONFSFileSystem {
                 outputTerm.api.log(`Created and stored AuroraONFS filesystem ${this.id}\n`);
             },
             getItemByPath: (path) => {
+                if (path.startsWith("onfsRoot/")) {
+                    path = path.slice(9);
+                };
                 const pathArray = path.split("/");
                 let currentObj = this.rootDirectory;
                 for (let i = 0; i < pathArray.length; i++) {
@@ -231,7 +234,29 @@ class AuroraONFSFileSystem {
                     }
                 }
                 return currentObj;
-            },            
+            },
+            
+            
+            getPathByItem: (item) => {
+                const findPath = (currentItem, targetItem, currentPath) => {
+                    if (currentItem === targetItem) {
+                        return currentPath;
+                    }
+
+                    if (currentItem.type === "directory") {
+                        for (const child of currentItem.content) {
+                            const result = findPath(child, targetItem, `${currentPath}/${child.name}`);
+                            if (result) {
+                                return result;
+                            }
+                        }
+                    }
+
+                    return null;
+                };
+
+                return findPath(this.rootDirectory, item, this.rootDirectory.name);
+            },
             syncToStorage: () => {
                 const fileSystemObject = {
                     onfsRoot: this.rootDirectory
@@ -365,12 +390,28 @@ class SystemKernel {
             },
             createFileSystemRWService: () => {
                 this.terminal.api.log("Creating service fsrws");
+                const fsrws = new Service("fsrws", "0.1.0", {
+                    getItemByPath: (path) => {
+                        return this.fileSystem.api.getItemByPath(path);
+                    },
+                    getRootDirectory: () => {
+                        return this.fileSystem.rootDirectory;
+                    },
+                    getPathByItem: (item) => {
+                        return this.fileSystem.api.getPathByItem(item);
+                    },
+                    getFileSystemID: () => {
+                        return this.fileSystem.id;
+                    }
+                });
+                this.api.registerService(fsrws);
             },
             createServices: () => {
                 this.api.createMemoryRWService();
                 this.api.createKTerminalService();
                 this.api.createProcessMgrService();
                 this.api.createGraphicsMgrService();
+                this.api.createFileSystemRWService();
             },
             createProcess: (application) => {
                 const newProcess = new Process(application, this.nextPID, this.nextGMemOffset, this.registeredServices);
@@ -433,7 +474,7 @@ class SystemKernel {
                     services.graphicsmgrs.api.createEllipse(40, 10, 25, 25, "#00ff00");
 
                     const chwContent = document.createElement("p");
-                    chwContent.innerText = "graphicmgr works!";
+                    chwContent.innerText = "graphicsmgrs works!";
                     chwContent.style.margin = 0;
                     chwContent.style.fontSize = "14px";
                     services.graphicsmgrs.api.createHTMLWindow(10, 40, 150, 25, "#ffffff", "#0000ff", chwContent);
@@ -493,8 +534,10 @@ class SystemKernel {
                         }
                     }
 
+                    let currentDirectory = services.fsrws.api.getItemByPath("onfsRoot/user");
+
                     while (true) {
-                        let input = await term.api.getInput("$ ");
+                        let input = await term.api.getInput(`${services.fsrws.api.getPathByItem(currentDirectory).slice(8)}$ `); // slice 8 from the path to remove "onfsRoot"
                         switch (input.split(/\s+/)[0]) {
                             case "exit":
                                 term.api.destroy();
@@ -510,15 +553,108 @@ class SystemKernel {
                                 if (args.argc === 1) {
                                     term.api.log(`AuroraShell version ${process.application.version}\n`, false);
                                     term.api.log("<NAME> indicates an argument, <NAME*> indicates a required argument\n", false);
+                                    term.api.log("cd - changes the current directory to <DIRECTORY> or onfsRoot/user if <DIRECTORY> is not specified- cd <DIRECTORY>\n", false);
                                     term.api.log("clear - clear the terminal output - no args\n", false);
                                     term.api.log("exit - destroy the terminal and end the application - no args\n", false);
                                     term.api.log("echo - output <MESSAGE> to the terminal - echo <MESSAGE*>\n", false);
                                     term.api.log("help - output a list of commands and version information to the terminal - no args\n", false);
+                                    term.api.log("ls - output the content in the current directory - no args\n", false);
+                                    term.api.log("mkdir - create a directory named <NAME> within the current directory - mkdir <NAME*>\n", false);
                                 }
                                 break;
                             } 
                             case "clear": {
                                 term.api.clear();
+                                break;
+                            }
+                            case "ls": {
+                                for (let i in currentDirectory.content) {
+                                    let item = currentDirectory.content[i];
+                                    if (item.type === "file") {
+                                        term.api.log(`${item.name}.${item.extension} (${item.type.substring(0, 1)})\n`, false);
+                                    } else {
+                                        term.api.log(`${item.name} (${item.type.substring(0, 1)})\n`, false);
+                                    }
+                                }
+                                break;
+                            }
+                            case "cd": {
+                                const args = parseCommand(input);
+                                
+                                if (args.argc < 2) {
+                                    currentDirectory = services.fsrws.api.getItemByPath("onfsRoot/user");
+                                    break;
+                                }
+
+                                let newPath;
+                                if (args.argv[1] === "onfsRoot" || args.argv[1] === "/") {
+                                    currentDirectory = services.fsrws.api.getRootDirectory();
+                                    break;
+                                }
+                                else if (args.argv[1].startsWith("onfsRoot/")) {
+                                    newPath = args.argv[1];
+                                }
+                                else if (args.argv[1].startsWith("/")) {
+                                    newPath = `onfsRoot${args.argv[1]}`;
+                                }
+                                else {
+                                    newPath = `${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]}`;
+                                }
+
+                                if (services.fsrws.api.getItemByPath(newPath) !== null && services.fsrws.api.getItemByPath(newPath).type === "directory") {
+                                    currentDirectory = services.fsrws.api.getItemByPath(newPath);
+                                } else {
+                                    term.api.log(`${newPath} is not a valid directory\n`, false);
+                                }
+
+                                break;
+                            }
+                            case "mkdir": {
+                                const args = parseCommand(input);
+
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required argument <NAME*>\n", false);
+                                    break;
+                                }
+
+                                if (services.fsrws.api.getItemByPath(`${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]}`) === null && !args.argv[1].includes("/")) {
+                                    const newDir = new AuroraONFSDirectory(args.argv[1], services.fsrws.api.getFileSystemID());
+
+                                    currentDirectory.api.addChild(newDir);
+                                } else {
+                                    term.api.log(`${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]} already exists or an illegal character was included in <NAME>.`, false);
+                                }
+                                break;
+                            }
+                            case "cat": {
+                                const args = parseCommand(input);
+
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required argument <FILE_PATH*>\n", false);
+                                    break;
+                                }
+                                
+                                if (args.argv[1].includes(".")) {
+                                    args.argv[1] = args.argv[1].split(".")[0];
+                                }
+
+                                let filePath;
+                                if (args.argv[1].startsWith("onfsRoot/")) {
+                                    filePath = args.argv[1];
+                                }
+                                else if (args.argv[1].startsWith("/")) {
+                                    filePath = `onfsRoot${args.argv[1]}`;
+                                }
+                                else {
+                                    filePath = `${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]}`;
+                                }
+
+                                if (services.fsrws.api.getItemByPath(filePath) !== null && services.fsrws.api.getItemByPath(filePath).type === "file") {
+                                    term.api.log(services.fsrws.api.getItemByPath(filePath).content + "\n", false);
+                                } else {
+                                    term.api.log(`${filePath} is not a valid file\n`, false);
+                                }
+
                                 break;
                             }
                             default:
