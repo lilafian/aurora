@@ -235,8 +235,6 @@ class AuroraONFSFileSystem {
                 }
                 return currentObj;
             },
-            
-            
             getPathByItem: (item) => {
                 const findPath = (currentItem, targetItem, currentPath) => {
                     if (currentItem === targetItem) {
@@ -269,6 +267,41 @@ class AuroraONFSFileSystem {
 
     static getFileSystemByID(id) {
         return AuroraONFSFileSystem.fileSystems[id];
+    }
+
+    static createFromFSObject(fsObject, fsId) {
+        if (!fsObject.onfsRoot) {
+            return;
+        }
+        
+        let newFS = new AuroraONFSFileSystem(fsId);
+        
+        let newRoot = new AuroraONFSDirectory("onfsRoot", newFS.id, fsObject.onfsRoot.content);
+
+        function reconstructSubdirectories(directory) {
+            for (let i in directory.content) {
+                let item = directory.content[i];
+                if (item.type === "directory" && item.api.addChild === undefined) {
+                    console.log(item);
+                    let newDir = new AuroraONFSDirectory(item.name, newFS.id, item.content);
+                    directory.content[i] = newDir;
+                    reconstructSubdirectories(item);
+                }
+                if (item.type === "file" && item.api.writeContent === undefined) {
+                    console.log(item);
+                    let newFile = new AuroraONFSFile(item.name, item.extension, item.content, newFS.id);
+                    directory.content[i] = newFile;
+                }
+            }
+        }
+
+        reconstructSubdirectories(newRoot);
+
+        console.log(newRoot);
+
+        newFS.rootDirectory = newRoot;
+
+        return newFS;
     }
 }
 
@@ -488,14 +521,20 @@ class SystemKernel {
 
             },
             initializeFileSystem: (ignoreExisting = false) => {
-                this.terminal.api.log("initializeFileSystem() called with ignoreExisting = true, any existing filesystem will be overwritten!\n");
-
                 if (!ignoreExisting && localStorage.getItem(`AuroraONFS-${this.name}-fs`) !== null) {
                     this.terminal.api.log(`Found filesystem AuroraONFS-${this.name}-fs, loading\n`);
-                    this.fileSystem = localStorage.getItem(`AuroraONFS-${this.name}-fs`);
+                    
+                    const fsObject = JSON.parse(localStorage.getItem(`AuroraONFS-${this.name}-fs`));
+
+                    const newFS = AuroraONFSFileSystem.createFromFSObject(fsObject, `${this.name}-fs`);
+
+                    this.fileSystem = newFS;
+
                     this.terminal.api.log(`Loaded filesystem AuroraONFS-${this.name}-fs\n`);
                     return;
                 }
+
+                this.terminal.api.log("initializeFileSystem() called with ignoreExisting = true, any existing filesystem will be overwritten!\n");
 
                 this.fileSystem = new AuroraONFSFileSystem(`${this.name}-fs`);
                 this.fileSystem.api.init(this.terminal);
@@ -508,7 +547,7 @@ class SystemKernel {
 
                 const userDir = new AuroraONFSDirectory("user", this.fileSystem.id);
 
-                const welcomeFile = new AuroraONFSFile("welcome", "txt", "welcome to aurora!", this.fileSystem.id);
+                const welcomeFile = new AuroraONFSFile("welcome", "txt", "welcome to aurora! <3", this.fileSystem.id);
                 
                 userDir.api.addChild(welcomeFile);
 
@@ -674,7 +713,7 @@ class SystemKernel {
                 this.terminal.id = `${this.name}-kernelt`;
                 this.terminal.api.log(`Kernel terminal is now ${this.terminal.id}\n\n`);
                 
-                this.api.initializeFileSystem(true);
+                this.api.initializeFileSystem();
 
                 this.api.createServices();
                 for (let i in this.registeredServices) {
