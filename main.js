@@ -170,12 +170,13 @@ class AuroraONFSDirectory {
                 this.content.push(item);
                 fileSystem.api.syncToStorage();
             },
-            removeChild: (name) => {
+            removeChild: (item) => {
                 const fileSystem = AuroraONFSFileSystem.getFileSystemByID(this.fileSystemID);
 
                 if (this.content.indexOf(item) === -1) { return; }
 
-                this.content.splice(0, this.content.indexOf(item));
+                this.content.splice(this.content.indexOf(item), 1);
+                fileSystem.api.syncToStorage();
             }
         }
     }  
@@ -202,6 +203,29 @@ class AuroraONFSFile {
     }
 }
 
+class AuroraONFSApplicationFile extends AuroraONFSFile {
+    constructor(name, application, fileSystemID) {
+        const serializedApplication = {
+            ...application,
+            exec: application.exec ? application.exec.toString() : null
+        };
+        super(name, "apn", JSON.stringify(serializedApplication), fileSystemID);
+    }
+
+    static getApplicationFromFile(file) {
+        const parsedContent = JSON.parse(file.content);
+        if (!parsedContent.name || !parsedContent.version) {
+            return null;
+        }
+        const app = new Application(parsedContent.name, parsedContent.version);
+        if (parsedContent.exec) {
+            const func = eval(`(${parsedContent.exec})`);
+            app.api.createExecutableFromFunction(func);
+        }
+        return app;
+    }
+}
+
 class AuroraONFSFileSystem {
     static fileSystems = {};
 
@@ -220,12 +244,17 @@ class AuroraONFSFileSystem {
                 outputTerm.api.log(`Created and stored AuroraONFS filesystem ${this.id}\n`);
             },
             getItemByPath: (path) => {
+                if (path === "onfsRoot" || path === "/") {
+                    return this.rootDirectory;
+                }
+
                 if (path.startsWith("onfsRoot/")) {
                     path = path.slice(9);
                 };
                 const pathArray = path.split("/");
                 let currentObj = this.rootDirectory;
                 for (let i = 0; i < pathArray.length; i++) {
+
                     try {
                         currentObj = currentObj.content.find(item => item.name === pathArray[i]);
                         if (!currentObj) return null;
@@ -282,13 +311,11 @@ class AuroraONFSFileSystem {
             for (let i in directory.content) {
                 let item = directory.content[i];
                 if (item.type === "directory" && item.api.addChild === undefined) {
-                    console.log(item);
                     let newDir = new AuroraONFSDirectory(item.name, newFS.id, item.content);
                     directory.content[i] = newDir;
                     reconstructSubdirectories(item);
                 }
                 if (item.type === "file" && item.api.writeContent === undefined) {
-                    console.log(item);
                     let newFile = new AuroraONFSFile(item.name, item.extension, item.content, newFS.id);
                     directory.content[i] = newFile;
                 }
@@ -296,8 +323,6 @@ class AuroraONFSFileSystem {
         }
 
         reconstructSubdirectories(newRoot);
-
-        console.log(newRoot);
 
         newFS.rootDirectory = newRoot;
 
@@ -352,6 +377,9 @@ class SystemKernel {
                     },
                     destroy: () => {
                         this.terminal.api.destroy();
+                    },
+                    setTerminal: (terminal) => {
+                        this.terminal = terminal;
                     }
                 });
                 this.api.registerService(kterminals);
@@ -362,8 +390,8 @@ class SystemKernel {
                     createProcess: (application) => {
                         return this.api.createProcess(application); // kernel method, not service method
                     },
-                    startProcess: (process) => {
-                        this.api.startProcess(process); // kernel method, not service method
+                    startProcess: (process, args = [], terminal = new SystemTerminal("stdout")) => {
+                        this.api.startProcess(process, args, terminal); // kernel method, not service method
                     },
                     getRunningProcesses: () => {
                         return this.runningProcesses;
@@ -452,12 +480,12 @@ class SystemKernel {
                 this.nextGMemOffset++;
                 return newProcess;
             },
-            startProcess: (process) => {
+            startProcess: (process, args = {}, terminal ) => {
                 if (process.status != Status.INACTIVE) {
                     return;
                 }
                 process.status = Status.ACTIVE;
-                process.application.exec(process, this.registeredServices);
+                process.application.exec(process, this.registeredServices, args, terminal);
 
                 this.runningProcesses[`${process.application.name}#${process.pid}`] = process;
             },
@@ -542,12 +570,12 @@ class SystemKernel {
                 const auroraDir = new AuroraONFSDirectory("aurora", this.fileSystem.id);
                 this.fileSystem.rootDirectory.api.addChild(auroraDir);
 
-                const sysExecDir = new AuroraONFSDirectory("sysExec", this.fileSystem.id);
-                this.fileSystem.rootDirectory.api.addChild(sysExecDir);
+                const execDir = new AuroraONFSDirectory("exec", this.fileSystem.id);
+                this.fileSystem.rootDirectory.api.addChild(execDir);
 
                 const userDir = new AuroraONFSDirectory("user", this.fileSystem.id);
 
-                const welcomeFile = new AuroraONFSFile("welcome", "txt", "welcome to aurora! <3", this.fileSystem.id);
+                const welcomeFile = new AuroraONFSFile("welcome", "txt", "welcome to aurora!", this.fileSystem.id);
                 
                 userDir.api.addChild(welcomeFile);
 
@@ -573,6 +601,19 @@ class SystemKernel {
                         }
                     }
 
+                    function getAbsolutePath(path) {
+                        if (path.startsWith("onfsRoot/")) {
+                            return path;
+                        }
+                        else if (path.startsWith("/")) {
+                            return `onfsRoot${path}`;
+                        }
+                        else {
+                            return `${services.fsrws.api.getPathByItem(currentDirectory)}/${path}`;
+                        }
+
+                    }
+
                     let currentDirectory = services.fsrws.api.getItemByPath("onfsRoot/user");
 
                     while (true) {
@@ -596,9 +637,15 @@ class SystemKernel {
                                     term.api.log("clear - clear the terminal output - no args\n", false);
                                     term.api.log("exit - destroy the terminal and end the application - no args\n", false);
                                     term.api.log("echo - output <MESSAGE> to the terminal - echo <MESSAGE*>\n", false);
+                                    term.api.log("fwrite - replace content of file at <FILE_PATH> with <NEW_CONTENT> - fwrite <FILE_PATH*> <NEW_CONTENT*>\n", false);
+                                    term.api.log("fappend - append <NEW_CONTENT> to the end of the content of the file at <FILE_PATH> - fappend <FILE_PATH*> <NEW_CONTENT*>\n", false);
+                                    term.api.log("fclear - clear the content of file at <FILE_PATH> - fclear <FILE_PATH*>\n", false);
                                     term.api.log("help - output a list of commands and version information to the terminal - no args\n", false);
                                     term.api.log("ls - output the content in the current directory - no args\n", false);
                                     term.api.log("mkdir - create a directory named <NAME> within the current directory - mkdir <NAME*>\n", false);
+                                    term.api.log("procls - list all running processes - no args", false);
+                                    term.api.log("rm - remove the item located at <PATH> - rm <PATH*>\n", false);
+                                    term.api.log("Type the name of an application located in /exec followed by the arguments you want to pass to it\n");
                                 }
                                 break;
                             } 
@@ -625,21 +672,10 @@ class SystemKernel {
                                     break;
                                 }
 
-                                let newPath;
-                                if (args.argv[1] === "onfsRoot" || args.argv[1] === "/") {
-                                    currentDirectory = services.fsrws.api.getRootDirectory();
-                                    break;
-                                }
-                                else if (args.argv[1].startsWith("onfsRoot/")) {
-                                    newPath = args.argv[1];
-                                }
-                                else if (args.argv[1].startsWith("/")) {
-                                    newPath = `onfsRoot${args.argv[1]}`;
-                                }
-                                else {
-                                    newPath = `${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]}`;
-                                }
+                                if (args.argv[1] === "/" || args.argv[1] === "onfsRoot") { currentDirectory = services.fsrws.api.getRootDirectory(); break; }
 
+                                let newPath = getAbsolutePath(args.argv[1]);
+                                
                                 if (services.fsrws.api.getItemByPath(newPath) !== null && services.fsrws.api.getItemByPath(newPath).type === "directory") {
                                     currentDirectory = services.fsrws.api.getItemByPath(newPath);
                                 } else {
@@ -661,8 +697,27 @@ class SystemKernel {
 
                                     currentDirectory.api.addChild(newDir);
                                 } else {
-                                    term.api.log(`${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]} already exists or an illegal character was included in <NAME>.`, false);
+                                    term.api.log(`${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]} already exists or an illegal character was included in <NAME>.\n`, false);
                                 }
+                                break;
+                            }
+                            case "rm": {
+                                const args = parseCommand(input);
+
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required argument <PATH*>\n", false);
+                                    break;
+                                }
+
+                                const path = getAbsolutePath(args.argv[1]);
+                                const pathArray = path.split("/");
+                                pathArray.splice(-1, 1);
+
+                                const parentPath = pathArray.join("/");
+
+                                const itemToRemove = services.fsrws.api.getItemByPath(path);
+                                
+                                services.fsrws.api.getItemByPath(parentPath).api.removeChild(itemToRemove);
                                 break;
                             }
                             case "cat": {
@@ -677,16 +732,7 @@ class SystemKernel {
                                     args.argv[1] = args.argv[1].split(".")[0];
                                 }
 
-                                let filePath;
-                                if (args.argv[1].startsWith("onfsRoot/")) {
-                                    filePath = args.argv[1];
-                                }
-                                else if (args.argv[1].startsWith("/")) {
-                                    filePath = `onfsRoot${args.argv[1]}`;
-                                }
-                                else {
-                                    filePath = `${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[1]}`;
-                                }
+                                let filePath = getAbsolutePath(args.argv[1]);
 
                                 if (services.fsrws.api.getItemByPath(filePath) !== null && services.fsrws.api.getItemByPath(filePath).type === "file") {
                                     term.api.log(services.fsrws.api.getItemByPath(filePath).content + "\n", false);
@@ -696,15 +742,136 @@ class SystemKernel {
 
                                 break;
                             }
-                            default:
+                            case "fwrite": {
+                                const args = parseCommand(input);
+                                
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required arguments <FILE_PATH*> <NEW_CONTENT*>\n", false);
+                                    break;
+                                }
+
+                                if (args.argc < 3) {
+                                    term.api.log("Missing required argument <NEW_CONTENT*>\n", false);
+                                    break;
+                                }
+
+                                if (args.argv[1].includes(".")) {
+                                    args.argv[1] = args.argv[1].split(".")[0];
+                                }
+
+                                const filePath = getAbsolutePath(args.argv[1]);
+                                const file = services.fsrws.api.getItemByPath(filePath);
+                                args.argv.splice(0, 2);
+                                const newContent = args.argv.join(" ");
+
+                                if (file !== null && file.type === "file") {
+                                    file.api.writeContent(newContent);
+                                } else {
+                                    term.api.log(`${filePath} is not a valid file\n`, false);
+                                }
+
+                                break;
+                            }
+                            case "fappend": {
+                                const args = parseCommand(input);
+                                
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required arguments <FILE_PATH*> <NEW_CONTENT*>\n", false);
+                                    break;
+                                }
+
+                                if (args.argc < 3) {
+                                    term.api.log("Missing required argument <NEW_CONTENT*>\n", false);
+                                    break;
+                                }
+
+                                if (args.argv[1].includes(".")) {
+                                    args.argv[1] = args.argv[1].split(".")[0];
+                                }
+
+                                const filePath = getAbsolutePath(args.argv[1]);
+                                const file = services.fsrws.api.getItemByPath(filePath);
+                                args.argv.splice(0, 2);
+                                const newContent = args.argv.join(" ");
+
+                                if (file !== null && file.type === "file") {
+                                    file.api.appendContent(newContent);
+                                } else {
+                                    term.api.log(`${filePath} is not a valid file\n`, false);
+                                }
+
+                                break;
+                            }
+                            case "fclear": {
+                                const args = parseCommand(input);
+
+                                if (args.argc < 2) {
+                                    term.api.log("Missing required argument <FILE_PATH*>\n", false);
+                                    break;
+                                }
+
+                                const filePath = getAbsolutePath(args.argv[1]);
+                                const file = services.fsrws.api.getItemByPath(filePath);
+
+                                if (file !== null && file.type === "file") {
+                                    file.api.clearContent();
+                                } else {
+                                    term.api.log(`${filePath} is not a valid file\n`, false);
+                                }
+
+                                break;
+                            }
+                            case "procls": {
+                                const procs = services.processmgrs.api.getRunningProcesses();
+                                for (const i in procs) {
+                                    term.api.log(`${procs[i].application.name} (PID ${procs[i].pid})\n`, false);
+                                }
+                                break;
+                            }
+                            default: {
                                 if (input.length > 0) {
-                                    term.api.log(`${input.split(/\s+/)[0]} is not a valid command\n`);
-                                } 
+                                    const sysExecFile = services.fsrws.api.getItemByPath(`onfsRoot/exec/${input}`);
+                                    const cdFile = services.fsrws.api.getItemByPath(`${services.fsrws.api.getPathByItem(currentDirectory)}/${input}`);
+                                    const args = parseCommand(input);
+                                    args.argv.splice(0, 1);
+                                    if (sysExecFile) {
+                                        if (sysExecFile.extension !== "apn") {
+                                            term.api.log(`${input.split(/\s+/)[0]} is not a valid command or application\n`, false);
+                                            break;
+                                        }
+                                        const application = AuroraONFSApplicationFile.getApplicationFromFile(sysExecFile);
+                                        const process = services.processmgrs.api.createProcess(application);
+                                        services.processmgrs.api.startProcess(process, args.argv, term);
+                                        break;
+                                    }
+                                    if (cdFile) {
+                                        if (cdFile.extension !== "apn") {
+                                            term.api.log(`${input.split(/\s+/)[0]} is not a valid command or application\n`, false);
+                                            break;
+                                        }
+                                        const application = AuroraONFSApplicationFile.getApplicationFromFile(cdFile);
+                                        const process = services.processmgrs.api.createProcess(application);
+                                        services.processmgrs.api.startProcess(process, args.argv, term);
+                                        break;
+                                    }
+
+                                    term.api.log(`${input.split(/\s+/)[0]} is not a valid command or application\n`, false);
+                                    break;
+                                }
+                            }
                         }
                     }
                 });
 
                 return auroraShell;
+            },
+            createWingmanDeskEnv: () => {
+                const wingman = new Application("deskenv", "1.0.0");
+                wingman.api.createExecutableFromFunction((process, services, argv, terminal) => {
+                    terminal.api.log("hello from deskenv\n");
+                });
+
+                return wingman;
             },
             init: async (terminal) => {
                 this.terminal = terminal;
@@ -713,7 +880,7 @@ class SystemKernel {
                 this.terminal.id = `${this.name}-kernelt`;
                 this.terminal.api.log(`Kernel terminal is now ${this.terminal.id}\n\n`);
                 
-                this.api.initializeFileSystem();
+                this.api.initializeFileSystem(true);
 
                 this.api.createServices();
                 for (let i in this.registeredServices) {
@@ -724,9 +891,26 @@ class SystemKernel {
                 
                 this.api.startTests();
 
-                const shell = this.api.createShell();
-                const shellProc = this.api.createProcess(shell);
+                
+                if (!this.fileSystem.api.getItemByPath("onfsRoot/exec/AuroraShell")) {
+                    const sysExec = this.fileSystem.api.getItemByPath("onfsRoot/exec");
+                    const shell = this.api.createShell();
+                    const appFile = new AuroraONFSApplicationFile("AuroraShell", shell, this.fileSystem.id);
+                    sysExec.api.addChild(appFile);
+                }
+                const shellFile = this.fileSystem.api.getItemByPath("onfsRoot/exec/AuroraShell");
+
+                const shellApplication = AuroraONFSApplicationFile.getApplicationFromFile(shellFile);
+                const shellProc = this.api.createProcess(shellApplication);
                 this.api.startProcess(shellProc);
+
+                if (!this.fileSystem.api.getItemByPath("onfsRoot/exec/deskEnv")) {
+                    const exec = this.fileSystem.api.getItemByPath("onfsRoot/exec");
+                    const wingman = this.api.createWingmanDeskEnv();
+                    const appFile = new AuroraONFSApplicationFile("deskEnv", wingman, this.fileSystem.id);
+                    exec.api.addChild(appFile);
+                }
+
             }
         };
     }
