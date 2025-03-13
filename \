@@ -428,7 +428,7 @@ class SystemKernel {
                     clearScreen: () => {
                         document.body.innerHTML = "";
                     },
-                    createRectangle: (posX, posY, sizeX, sizeY, colorHex, parent = document.body) => {
+                    createRectangle: (posX, posY, sizeX, sizeY, colorHex) => {
                         const newRect = document.createElement("div");
                         newRect.style.position = "absolute";
                         newRect.style.left = `${posX}px`;
@@ -436,10 +436,10 @@ class SystemKernel {
                         newRect.style.width = `${sizeX}px`;
                         newRect.style.height = `${sizeY}px`;
                         newRect.style.backgroundColor = colorHex;
-                        parent.appendChild(newRect);
+                        document.body.appendChild(newRect);
                         return newRect;
                     },
-                    createEllipse: (posX, posY, sizeX, sizeY, colorHex, parent = document.body) => {
+                    createEllipse: (posX, posY, sizeX, sizeY, colorHex) => {
                         const newRect = document.createElement("div");
                         newRect.style.position = "absolute";
                         newRect.style.left = `${posX}px`;
@@ -448,10 +448,10 @@ class SystemKernel {
                         newRect.style.height = `${sizeY}px`;
                         newRect.style.backgroundColor = colorHex;
                         newRect.style.borderRadius = "50%";
-                        parent.appendChild(newRect);
+                        document.body.appendChild(newRect);
                         return newRect;
                     },
-                    createHTMLWindow: (posX, posY, sizeX, sizeY, backgroundColorHex, colorHex, content, parent = document.body) => {
+                    createHTMLWindow: (posX, posY, sizeX, sizeY, backgroundColorHex, colorHex, content) => {
                         const newWindow = document.createElement("div");
                         newWindow.style.position = "absolute";
                         newWindow.style.left = `${posX}px`;
@@ -463,11 +463,11 @@ class SystemKernel {
                         newWindow.style.margin = 0;
                         newWindow.style.padding = 0;
                         newWindow.appendChild(content);
-                        parent.appendChild(newWindow);
+                        document.body.appendChild(newWindow);
                         return newWindow;
                     },
-                    createTextualElement: (posX, posY, fontSize, foreColorHex, content, backColorHex = "#00000000", parent = document.body) => {
-                        const newText = document.createElement("span");
+                    createTextualElement: (posX, posY, fontSize, foreColorHex, content, backColorHex = "#00000000") => {
+                        const newText = document.createElement("p");
                         newText.style.position = "absolute";
                         newText.style.left = `${posX}px`;
                         newText.style.top = `${posY}px`;
@@ -475,10 +475,10 @@ class SystemKernel {
                         newText.style.color = foreColorHex;
                         newText.textContent = content;
                         newText.style.backgroundColor = backColorHex;
-                        parent.appendChild(newText);
+                        document.body.appendChild(newText);
                         return newText;
                     },
-                    createImage: (posX, posY, sizeX, sizeY, url, parent = document.body) => {
+                    createImage: (posX, posY, sizeX, sizeY, url) => {
                         const newImage = document.createElement("img");
                         newImage.style.position = "absolute";
                         newImage.style.left = `${posX}px`;
@@ -486,7 +486,7 @@ class SystemKernel {
                         newImage.style.width = `${sizeX}px`;
                         newImage.style.height = `${sizeY}px`;
                         newImage.src = url;
-                        parent.appendChild(newImage);
+                        document.body.appendChild(newImage);
                         return newImage;
                     },
                     getScreenHeight: () => {
@@ -556,13 +556,10 @@ class SystemKernel {
                         if (localHours > 11) {
                             amPm = "PM";
                             if (localHours !== 12) {
-                                localHours -= 12;
+                                localHours -= 12
                             }
                         } else {
                             amPm = "AM";
-                            if (localHours === 0) {
-                                localHours = 12;
-                            }
                         }
                         return `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}:${String(localSeconds).padStart(2, '0')} ${amPm}`;
                     },
@@ -1001,15 +998,7 @@ class SystemKernel {
                     }
 
                     const topbar = services.graphicsmgrs.api.createRectangle(0, 0, screenWidth, screenHeight * 0.04, colors.darkTransparent);
-
-                    let timeString = services.times.api.getCurrentTime12HourHMS();
-                    const timeText = services.graphicsmgrs.api.createTextualElement(screenWidth - 15 - 7 * 12, screenHeight * 0.02 - 7, 14, "#ffffff", timeString, "#00000000", topbar);
-                    timeText.style.fontFamily = "sans-serif, monospace";
-                    
-                    const timeStringUpdateInterval = setInterval(() => {
-                        timeString = services.times.api.getCurrentTime12HourHMS();
-                        timeText.textContent = timeString;
-                    }, 1000);
+                    const timeText = services.graphicsmgrs.api.createTextualElement(screenWidth - 15 - 7 * 8, screenHeight * 0.04 - 15, "#ffffff", services.times.api.getCurrentTime12HourHMS());
                 });
 
                 return wingman;
