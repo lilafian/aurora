@@ -424,7 +424,7 @@ class SystemKernel {
             },
             createGraphicsMgrService: () => {
                 this.terminal.api.log("Creating service graphicsmgrs\n");
-                const graphicsmgrs = new Service("graphicsmgrs", "0.1.0", {
+                const graphicsmgrs = new Service("graphicsmgrs", "0.2.0", {
                     clearScreen: () => {
                         document.body.innerHTML = "";
                     },
@@ -516,12 +516,64 @@ class SystemKernel {
                 });
                 this.api.registerService(fsrws);
             },
+            createTimeService: () => {
+                this.terminal.api.log("Creating service times");
+                const times = new Service("times", "0.1.0", {
+                    getCurrentTime24HourHM: () => {
+                        const now = new Date();
+                        const localHours = now.getHours();
+                        const localMinutes = now.getMinutes();
+                        return `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}`;
+                    },
+                    getCurrentTime24HourHMS: () => {
+                        const now = new Date();
+                        const localHours = now.getHours();
+                        const localMinutes = now.getMinutes();
+                        const localSeconds = now.getSeconds();
+                        return `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}:${String(localSeconds).padStart(2, '0')}`;
+                    },
+                    getCurrentTime12HourHM: () => {
+                        const now = new Date();
+                        let localHours = now.getHours();
+                        const localMinutes = now.getMinutes();
+                        let amPm;
+                        if (localHours > 11) {
+                            amPm = "PM";
+                            if (localHours !== 12) {
+                                localHours -= 12
+                            }
+                        } else {
+                            amPm = "AM";
+                        }
+                        return `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')} ${amPm}`;
+                    },
+                    getCurrentTime12HourHMS: () => {
+                        const now = new Date();
+                        let localHours = now.getHours();
+                        const localMinutes = now.getMinutes();
+                        const localSeconds = now.getSeconds();
+                        let amPm;
+                        if (localHours > 11) {
+                            amPm = "PM";
+                            if (localHours !== 12) {
+                                localHours -= 12
+                            }
+                        } else {
+                            amPm = "AM";
+                        }
+                        return `${String(localHours).padStart(2, '0')}:${String(localMinutes).padStart(2, '0')}:${String(localSeconds).padStart(2, '0')} ${amPm}`;
+                    },
+
+                });
+                this.api.registerService(times);
+            },
             createServices: () => {
                 this.api.createMemoryRWService();
                 this.api.createKTerminalService();
                 this.api.createProcessMgrService();
                 this.api.createGraphicsMgrService();
                 this.api.createFileSystemRWService();
+                this.api.createTimeService();
             },
             createProcess: (application) => {
                 const newProcess = new Process(application, this.nextPID, this.nextGMemOffset, this.registeredServices);
@@ -946,6 +998,7 @@ class SystemKernel {
                     }
 
                     const topbar = services.graphicsmgrs.api.createRectangle(0, 0, screenWidth, screenHeight * 0.04, colors.darkTransparent);
+                    console.log(services.times.api.getCurrentTime12HourHM());
                 });
 
                 return wingman;
