@@ -39,7 +39,7 @@ class SystemTerminal {
         };
     }
 
-    handleKeyPress(event) {
+    async handleKeyPress(event) {
         if (this.inputCallback) {
             event.preventDefault();
             switch (event.key) {
@@ -52,11 +52,12 @@ class SystemTerminal {
                     this.element.innerText += "\n";
                     this.inputCallback(input);
                     this.inputCallback = null;
-                    this.updateDisplay();
                     break;
                 case "Backspace":
                     if (this.cursorPosition > 0) {
-                        this.inputBuffer = this.inputBuffer.slice(0, this.cursorPosition - 1) + this.inputBuffer.slice(this.cursorPosition);
+                        this.inputBuffer = 
+                            this.inputBuffer.slice(0, this.cursorPosition - 1) + 
+                            this.inputBuffer.slice(this.cursorPosition);
                         this.cursorPosition--;
                     }
                     break;
@@ -64,11 +65,27 @@ class SystemTerminal {
                     if (this.cursorPosition > 0) this.cursorPosition--;
                     break;
                 case "ArrowRight":
-                    if (this.cursorPosition < this.inputBuffer.length) this.cursorPosition++;
+                    if (this.cursorPosition < this.inputBuffer.length) 
+                        this.cursorPosition++;
                     break;
                 default:
-                    if (event.key.length === 1) {
-                        this.inputBuffer = this.inputBuffer.slice(0, this.cursorPosition) + event.key + this.inputBuffer.slice(this.cursorPosition);
+                    if (event.ctrlKey && event.key === "v") {
+                        const clipboardText = await navigator.clipboard.readText();
+                        if (clipboardText) {
+                            const beforeCursor = 
+                                this.inputBuffer.slice(0, this.cursorPosition);
+                            const afterCursor = 
+                                this.inputBuffer.slice(this.cursorPosition);
+                            this.inputBuffer = beforeCursor + clipboardText + afterCursor;
+                            this.cursorPosition += clipboardText.length;
+                        }
+                    } else if (event.key.length === 1) { 
+                        const beforeCursor =
+                            this.inputBuffer.slice(0, this.cursorPosition);
+                        const afterCursor =
+                            this.inputBuffer.slice(this.cursorPosition);
+                        this.inputBuffer =
+                            beforeCursor + event.key + afterCursor;
                         this.cursorPosition++;
                     }
             }
@@ -77,8 +94,11 @@ class SystemTerminal {
     }
 
     updateDisplay() {
-        const displayText = this.inputPrompt + this.inputBuffer;
-        const cursorIndex = this.inputPrompt.length + this.cursorPosition;
+        const displayText = 
+            `${this.inputPrompt}${this.inputBuffer}`;
+        const cursorIndex =
+            `${this.inputPrompt}`.length + 
+            `${this.cursorPosition}`;
         if (this.inputBuffer === "") {
             this.element.innerText = this.element.innerText.split("\n").slice(0, -1).join("\n") + "\n" + displayText;
         } else {
@@ -445,6 +465,35 @@ class SystemKernel {
                         newWindow.appendChild(content);
                         document.body.appendChild(newWindow);
                         return newWindow;
+                    },
+                    createTextualElement: (posX, posY, fontSize, foreColorHex, content, backColorHex = "#00000000") => {
+                        const newText = document.createElement("p");
+                        newText.style.position = "absolute";
+                        newText.style.left = `${posX}px`;
+                        newText.style.top = `${posY}px`;
+                        newText.style.fontSize = `${fontSize}px`;
+                        newText.style.color = foreColorHex;
+                        newText.textContent = content;
+                        newText.style.backgroundColor = backColorHex;
+                        document.body.appendChild(newText);
+                        return newText;
+                    },
+                    createImage: (posX, posY, sizeX, sizeY, url) => {
+                        const newImage = document.createElement("img");
+                        newImage.style.position = "absolute";
+                        newImage.style.left = `${posX}px`;
+                        newImage.style.top = `${posY}px`;
+                        newImage.style.width = `${sizeX}px`;
+                        newImage.style.height = `${sizeY}px`;
+                        newImage.src = url;
+                        document.body.appendChild(newImage);
+                        return newImage;
+                    },
+                    getScreenHeight: () => {
+                        return window.innerHeight;
+                    },
+                    getScreenWidth: () => {
+                        return window.innerWidth;
                     }
                 });
                 this.api.registerService(graphicsmgrs);
@@ -531,15 +580,22 @@ class SystemKernel {
 
                 const graphicsTestApplication = new Application("graphicstest", "1.0.0");
                 graphicsTestApplication.api.createExecutableFromFunction((process, services) => {
+                    const screenWidth = services.graphicsmgrs.api.getScreenWidth();
+                    const screenHeight = services.graphicsmgrs.api.getScreenHeight();
+
                     services.graphicsmgrs.api.createRectangle(10, 10, 25, 25, "#ff0000");
                     services.graphicsmgrs.api.createEllipse(40, 10, 25, 25, "#00ff00");
 
                     const chwContent = document.createElement("p");
-                    chwContent.innerText = "graphicsmgrs works!";
+                    chwContent.innerText = "createHTMLWindow";
                     chwContent.style.margin = 0;
                     chwContent.style.fontSize = "14px";
                     services.graphicsmgrs.api.createHTMLWindow(10, 40, 150, 25, "#ffffff", "#0000ff", chwContent);
-                    services.kterminals.api.log("Graphics service works (assuming elements are in the top-left corner)\n");
+                    services.graphicsmgrs.api.createTextualElement(500, 100, 20, "#0000ff", "createTextualElement", "#ffffff");
+                    services.graphicsmgrs.api.createImage(screenWidth - 110, screenHeight - 110, 100, 100, "https://raw.githubusercontent.com/lilafian/aurora/master/img/auroralogo-white.png");
+                    services.kterminals.api.log(screenWidth + "\n");
+                    services.kterminals.api.log(screenHeight + "\n");
+                    services.kterminals.api.log("Graphics service works (assuming elements are on the screen)\n");
                 });
                 
                 this.terminal.api.log("\nTesting graphics API (if there is no output, graphicsmgrs is malfunctioned)\n");
@@ -591,6 +647,7 @@ class SystemKernel {
 
                     term.api.log(`Aurora Shell version ${process.application.version}\n`, false);
                     term.api.log("Use 'help' to display a list of commands\n", false);
+                    term.api.log("Use 'deskEnv' to start the graphical interface\n", false);
 
                     function parseCommand(command) {
                         let argv = command.split(/\s+/);
@@ -830,9 +887,9 @@ class SystemKernel {
                             }
                             default: {
                                 if (input.length > 0) {
-                                    const sysExecFile = services.fsrws.api.getItemByPath(`onfsRoot/exec/${input}`);
-                                    const cdFile = services.fsrws.api.getItemByPath(`${services.fsrws.api.getPathByItem(currentDirectory)}/${input}`);
                                     const args = parseCommand(input);
+                                    const sysExecFile = services.fsrws.api.getItemByPath(`onfsRoot/exec/${args.argv[0]}`);
+                                    const cdFile = services.fsrws.api.getItemByPath(`${services.fsrws.api.getPathByItem(currentDirectory)}/${args.argv[0]}`);
                                     args.argv.splice(0, 1);
                                     if (sysExecFile) {
                                         if (sysExecFile.extension !== "apn") {
@@ -868,7 +925,27 @@ class SystemKernel {
             createWingmanDeskEnv: () => {
                 const wingman = new Application("deskenv", "1.0.0");
                 wingman.api.createExecutableFromFunction((process, services, argv, terminal) => {
-                    terminal.api.log("hello from deskenv\n");
+                    const argc = argv.length;
+                    terminal.api.log("starting wingman...\n");
+                    services.graphicsmgrs.api.clearScreen();
+                    const term = new SystemTerminal("wingman-terminal");
+                    term.api.init();
+                    term.api.log("welcome to wingman!\n");
+
+                    term.api.log("getting screen information...\n");
+                    const screenWidth = services.graphicsmgrs.api.getScreenWidth();
+                    const screenHeight = services.graphicsmgrs.api.getScreenHeight();
+                    term.api.log(`screen width: ${screenWidth}\nscreen height: ${screenHeight}\n`);
+
+                    const wallpaper = services.graphicsmgrs.api.createImage(0, 0, screenWidth, screenHeight, "https://images.unsplash.com/photo-1483347756197-71ef80e95f73?fm=jpg");
+                    wallpaper.style.zIndex = "0";
+                    wallpaper.style.userSelect = "none";
+
+                    const colors = {
+                        darkTransparent: "#00000077"
+                    }
+
+                    const topbar = services.graphicsmgrs.api.createRectangle(0, 0, screenWidth, screenHeight * 0.04, colors.darkTransparent);
                 });
 
                 return wingman;
