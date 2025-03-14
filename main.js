@@ -356,7 +356,7 @@ class SystemKernel {
         this.version = version;
         this.globalMemory = [];
         this.registeredServices = {};
-        this.runningProcesses = {};
+        this.runningProcesses = [];
         this.nextPID = 0;
         this.nextGMemOffset = 0;
         this.fileSystem = null;
@@ -406,7 +406,7 @@ class SystemKernel {
             },
             createProcessMgrService: () => {
                 this.terminal.api.log("Creating service processmgrs\n");
-                const processmgrs = new Service("processmgrs", "0.1.0", {
+                const processmgrs = new Service("processmgrs", "0.2.0", {
                     createProcess: (application) => {
                         return this.api.createProcess(application); // kernel method, not service method
                     },
@@ -418,6 +418,17 @@ class SystemKernel {
                     },
                     getNextAvailablePID: () => {
                         return this.nextPID;
+                    },
+                    getDesktopEnvironmentProcess: () => {
+                        // dont make this function use find it doesnt work.
+                        // if you make it work then please use it though
+                        // it just returns undefined even when deskenv is running :(
+                        for (const i in this.runningProcesses) {
+                            const process = this.runningProcesses[i];
+                            if (process.application.name === "deskenv") {
+                                return process;
+                            }
+                        }
                     }
                 });
                 this.api.registerService(processmgrs);
@@ -570,6 +581,17 @@ class SystemKernel {
                 });
                 this.api.registerService(times);
             },
+            createSystemInfoService: () => {
+                const sysinfos = new Service("sysinfos", "0.1.0", {
+                    getKernelName: () => {
+                        return this.name;
+                    },
+                    getKernelVersion: () => {
+                        return this.version;
+                    }
+                });
+                this.api.registerService(sysinfos);
+            },
             createServices: () => {
                 this.api.createMemoryRWService();
                 this.api.createKTerminalService();
@@ -577,6 +599,7 @@ class SystemKernel {
                 this.api.createGraphicsMgrService();
                 this.api.createFileSystemRWService();
                 this.api.createTimeService();
+                this.api.createSystemInfoService();
             },
             createProcess: (application) => {
                 const newProcess = new Process(application, this.nextPID, this.nextGMemOffset, this.registeredServices);
@@ -755,9 +778,9 @@ class SystemKernel {
                                     term.api.log("help - output a list of commands and version information to the terminal - no args\n", false);
                                     term.api.log("ls - output the content in the current directory - no args\n", false);
                                     term.api.log("mkdir - create a directory named <NAME> within the current directory - mkdir <NAME*>\n", false);
-                                    term.api.log("procls - list all running processes - no args", false);
+                                    term.api.log("procls - list all running processes - no args\n", false);
                                     term.api.log("rm - remove the item located at <PATH> - rm <PATH*>\n", false);
-                                    term.api.log("Type the name of an application located in /exec followed by the arguments you want to pass to it\n");
+                                    term.api.log("Type the name of an application located in /exec followed by the arguments you want to pass to it\n", false);
                                 }
                                 break;
                             } 
@@ -997,21 +1020,238 @@ class SystemKernel {
                     wallpaper.style.userSelect = "none";
 
                     const colors = {
-                        darkTransparent: "#00000077"
+						transparent: "#00000000",
+                        darkTransparent: "#00000077",
+						darkenedScreen: "#0000005a"
                     }
-
+                    
+					term.api.log("creating topbar");
                     const topbar = services.graphicsmgrs.api.createRectangle(0, 0, screenWidth, screenHeight * 0.04, colors.darkTransparent);
+					topbar.style.userSelect = "none";
+                    topbar.style.zIndex = "1";
 
                     let timeString = services.times.api.getCurrentTime12HourHMS();
-                    const timeText = services.graphicsmgrs.api.createTextualElement(screenWidth - 15 - 7 * 12, screenHeight * 0.02 - 7, 14, "#ffffff", timeString, "#00000000", topbar);
-                    timeText.style.fontFamily = "sans-serif, monospace";
+					term.api.log(`time is currently ${timeString}`);
+                    const timeText = services.graphicsmgrs.api.createTextualElement(screenWidth - 15 - screenHeight * 0.0075 * 12, screenHeight * 0.01, screenHeight * 0.015, "#ffffff", timeString, "#00000000", topbar);
+                    timeText.style.fontFamily = "Ubuntu, sans-serif, monospace";
                     
                     const timeStringUpdateInterval = setInterval(() => {
                         timeString = services.times.api.getCurrentTime12HourHMS();
                         timeText.textContent = timeString;
                     }, 1000);
-                });
+                    
+					term.api.log("Creating menu");
+                    const menuButton = services.graphicsmgrs.api.createTextualElement(15, screenHeight * 0.01, screenHeight * 0.015, "#ffffff", "MENU", "#00000000", topbar);
+					menuButton.style.fontFamily = "Ubuntu, sans-serif, monospace";
+					menuButton.style.cursor = "pointer";
+					let menuOpen = false;
+					
+					function toggleMenu() {
+						term.api.log("Menu clicked");
+						if (menuOpen) {
+							term.api.log("Closing menu");
+							document.getElementById("wm-menu").remove();
+							menuOpen = false;
+							menuButton.textContent = "MENU";
+							return;
+						}
+						menuButton.textContent = "EXIT";
+						
+						term.api.log("Opening menu");
+						const menu = services.graphicsmgrs.api.createRectangle(0, screenHeight * 0.04, screenWidth, screenHeight * 0.96, colors.darkTransparent);
+                        menu.style.zIndex = "999";
+						
+						const execDir = services.fsrws.api.getItemByPath("onfsRoot/exec");
+						let appList = [];
+						for (let i in execDir.content) {
+							const item = execDir.content[i];
+							if (item.type === "file" && item.extension === "apn") {
+								let application = AuroraONFSApplicationFile.getApplicationFromFile(item);
+								appList.push(application);
+							}
+						}
+						
+						let menuAppListYOffset = 0;
+						let menuAppListXOffset = 0;
+						for (let i in appList) {
+							const listEntry = services.graphicsmgrs.api.createTextualElement(15 + menuAppListXOffset, 15 + menuAppListYOffset, 20, "#ffffff", appList[i].name, "#00000000", menu);
+							listEntry.style.cursor = "pointer";
+                            listEntry.style.fontFamily = "Ubuntu, sans-serif, monospace";
+							menuAppListYOffset += 20;
+							if (menuAppListYOffset > screenWidth * 0.75) {
+								menuAppListYOffset = 0;
+								menuAppListXOffset += 200;
+							}
+							listEntry.addEventListener("click", () => {
+								const process = services.processmgrs.api.createProcess(appList[i]);
+								services.processmgrs.api.startProcess(process);
+                                toggleMenu();
+							});
+						}
+						menuAppListYOffset = 0;
 
+                        const helpText = services.graphicsmgrs.api.createTextualElement(15, screenHeight * 0.96 - 35, 20, "#ffffff", `Click on an application name to run it. You are using ${services.sysinfos.api.getKernelName()} v${services.sysinfos.api.getKernelVersion()} and Wingman v${process.application.version}.`, "#00000000", menu);
+                        helpText.style.fontFamily = "Ubuntu, sans-serif, monospace";
+						menu.id = "wm-menu";
+						menuOpen = true;
+					}
+					
+					menuButton.addEventListener("click", toggleMenu);
+
+                    let highestWinZIndex = 0;
+                    process.deskapi = {
+                        createWindow: (title, content, sizeX = 500, sizeY = 400, posX = screenWidth / 2 - sizeX / 2, posY = screenWidth / 2 - sizeY) => {
+                            const titlebar = document.createElement("div");
+                            titlebar.style.width = "calc(100% - 6px)";
+                            titlebar.style.height = `${screenHeight * 0.025 - 3}px`;
+                            titlebar.style.backgroundColor = colors.darkTransparent;
+                            titlebar.style.padding = "3px";
+                            titlebar.style.display = "flex";
+                            titlebar.style.alignItems = "center";
+                            titlebar.style.justifyContent = "space-between";
+                            titlebar.style.userSelect = "none";
+                            titlebar.style.backdropFilter = "blur(3px)";
+
+                            const titleElement = document.createElement("span");
+                            titleElement.textContent = title;
+                            titleElement.style.fontFamily = "Ubuntu, sans-serif, monospace";
+                            titleElement.style.fontSize = `${screenHeight * 0.015}px`;
+
+                            const closeButton = document.createElement("span");
+                            closeButton.textContent = "X";
+                            closeButton.style.fontFamily = "Ubuntu, sans-serif, monospace";
+                            closeButton.style.fontSize = `${screenHeight * 0.015}px`;
+                            closeButton.style.cursor = "pointer";
+                            
+                            titlebar.appendChild(titleElement);
+                            titlebar.appendChild(closeButton);
+                            
+                            content.style.height = `${sizeY - screenHeight * 0.025 - 3}px`;
+
+                            const winContent = document.createElement("div");
+                            winContent.appendChild(titlebar);
+                            winContent.appendChild(content);
+                    
+                            const newWindow = services.graphicsmgrs.api.createHTMLWindow(posX, posY, sizeX, sizeY, "#00000000", "#ffffff", winContent);
+                            newWindow.style.borderRadius = "5px";
+                            newWindow.style.border = "2px solid black";
+                            newWindow.style.zIndex = highestWinZIndex + 1;
+                            highestWinZIndex++;
+                            newWindow.addEventListener("click", () => {
+                                newWindow.style.zIndex = highestWinZIndex + 1;
+                                highestWinZIndex++;
+                            });
+
+
+                            closeButton.addEventListener("click", () => {
+                                newWindow.remove();
+                            });
+                            titlebar.addEventListener("mousedown", () => {
+                                newWindow.style.zIndex = highestWinZIndex + 1;
+                                highestWinZIndex++;
+                            });
+
+                            // taken from https://www.w3schools.com/howto/howto_js_draggable.asp
+                            function dragElement(element, bar) {
+                                var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+                                
+                                bar.onmousedown = dragMouseDown;
+
+                                function dragMouseDown(e) {
+                                    e = e || window.event;
+                                    e.preventDefault();
+                                    pos3 = e.clientX;
+                                    pos4 = e.clientY;
+                                    document.onmouseup = closeDragElement;
+                                    document.onmousemove = elementDrag;
+                                }
+
+                                function elementDrag(e) {
+                                    e = e || window.event;
+                                    e.preventDefault();
+                                    pos1 = pos3 - e.clientX;
+                                    pos2 = pos4 - e.clientY;
+                                    pos3 = e.clientX;
+                                    pos4 = e.clientY;
+
+                                    element.style.top = (element.offsetTop - pos2) + "px";
+                                    element.style.left = (element.offsetLeft - pos1) + "px";
+                                }
+
+                                function closeDragElement() {
+                                    document.onmouseup = null;
+                                    document.onmousemove = null;
+                                }
+                            }
+                                
+                            dragElement(newWindow, titlebar);
+                            
+                            return newWindow;
+                        },
+                        removeWindow: (window) => {
+                            window.remove();
+                        }
+                    };
+                    
+                    let welcomeWingman;
+                    if (services.fsrws.api.getItemByPath("onfsRoot/exec/WingmanWelcome")) {
+                        welcomeWingman = services.fsrws.api.getItemByPath("onfsRoot/exec/WingmanWelcome");
+                    } else {
+                        welcomeWingman = new Application("WingmanWelcome", "1.0.0");
+
+                        welcomeWingman.api.createExecutableFromFunction((wprocess, wservices, wargv) => {
+                            const deskproc = wservices.processmgrs.api.getDesktopEnvironmentProcess();
+                            const deskapi = deskproc.deskapi;
+                            
+                            const windowContent = document.createElement("div");
+                            windowContent.style.backgroundColor = "#ffffff";
+                            windowContent.style.color = "#000000";
+
+                            const bigWelcomeText = document.createElement("span");
+                            bigWelcomeText.style.position = "absolute";
+                            bigWelcomeText.style.fontFamily = "Ubuntu, sans-serif, monospace";
+                            bigWelcomeText.textContent = "welcome";
+                            bigWelcomeText.style.fontSize = "130px";
+                            bigWelcomeText.style.width = "100%";
+                            bigWelcomeText.style.textAlign = "center";
+                            bigWelcomeText.style.color = "transparent";
+                            bigWelcomeText.style.background = "linear-gradient(to bottom, #00000033, #00000001)";
+                            bigWelcomeText.style.backgroundClip = "text";
+                            bigWelcomeText.style.userSelect = "none";
+
+                            windowContent.appendChild(bigWelcomeText);
+
+                            const logoContainerOuter = document.createElement("div");
+                            logoContainerOuter.style.width = "100%";
+                            logoContainerOuter.style.display = "flex";
+                            logoContainerOuter.style.justifyContent = "center";
+                            logoContainerOuter.style.position = "absolute";
+                            logoContainerOuter.style.top = "70px";
+                            const logoContainerInner = document.createElement("div");
+                            logoContainerInner.style.display = "flex";
+                            const logo = document.createElement("img");
+                            logo.src = "https://raw.githubusercontent.com/lilafian/aurora/master/img/wingmanlogo.png";
+                            logo.style.width = "100px";
+                            const logoText = document.createElement("span");
+                            logoText.textContent = "WINGMAN";
+                            logoText.style.fontFamily = "Ubuntu, sans-serif, monospace";
+                            logoText.style.fontSize = "60px";
+                            logoText.style.marginLeft = "15px";
+
+                            logoContainerInner.appendChild(logo);
+                            logoContainerInner.appendChild(logoText);
+                            logoContainerOuter.appendChild(logoContainerInner);
+                            windowContent.appendChild(logoContainerOuter);
+
+                            deskapi.createWindow("Welcome to Wingman", windowContent, 600, 500); 
+                        });
+
+                        const execDir = services.fsrws.api.getItemByPath("onfsRoot/exec");
+                        const appFile = new AuroraONFSApplicationFile("WingmanWelcome", welcomeWingman, services.fsrws.getFileSystemID);
+                        execDir.api.addChild(appFile);
+                    }
+                    const welcomeWingmanProcess = services.processmgrs.api.createProcess(welcomeWingman);
+                });
                 return wingman;
             },
             init: async (terminal) => {
@@ -1074,6 +1314,7 @@ class SystemLoader {
     }
 }
 
-const AuroraSystemKernel = new SystemKernel("Aurora", "0.1.0");
-const AuroraSystemLoader = new SystemLoader(AuroraSystemKernel, "AuroraSysLoader", "0.1.0");
+const AuroraSystemKernel = new SystemKernel("Aurora", "0.2.0");
+const AuroraSystemLoader = new SystemLoader(AuroraSystemKernel, "AuroraSysLoader", "1.0.0");
 AuroraSystemLoader.api.boot();
+
