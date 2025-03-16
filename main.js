@@ -1206,7 +1206,7 @@ class SystemKernel {
                     
                     let welcomeWingman;
                     if (services.fsrws.api.getItemByPath("onfsRoot/exec/WingmanWelcome")) {
-                        welcomeWingman = services.fsrws.api.getItemByPath("onfsRoot/exec/WingmanWelcome");
+                        welcomeWingman = AuroraONFSApplicationFile.getApplicationFromFile(services.fsrws.api.getItemByPath("onfsRoot/exec/WingmanWelcome"));
                     } else {
                         welcomeWingman = new Application("WingmanWelcome", "1.0.0");
 
@@ -1262,6 +1262,7 @@ class SystemKernel {
                         execDir.api.addChild(appFile);
                     }
                     const welcomeWingmanProcess = services.processmgrs.api.createProcess(welcomeWingman);
+                    console.log(welcomeWingman);
                     setTimeout(() => {
                         services.processmgrs.api.startProcess(welcomeWingmanProcess);
                     }, 1500);
@@ -1297,6 +1298,22 @@ class SystemKernel {
                 });
                 return ate;
             },
+            createVAurora: () => {
+                const aframe = new Application("VAurora", "1.0.0");
+                aframe.api.createExecutableFromFunction((process, services, argv) => {
+                    const deskproc = services.processmgrs.api.getDesktopEnvironmentProcess();
+                    const deskapi = deskproc.deskapi;
+
+                    const iframe = document.createElement("iframe");
+                    iframe.src = window.location;
+                    iframe.style.width = "100%";
+                    iframe.style.height = "100%";
+                    iframe.setAttribute("credentialless", true);
+
+                    deskapi.createWindow("VAurora", iframe);
+                });
+                return aframe;
+            },
             init: async (terminal) => {
                 this.terminal = terminal;
                 this.terminal.api.log(`${name} kernel v${version} started\n\n`);
@@ -1304,7 +1321,7 @@ class SystemKernel {
                 this.terminal.id = `${this.name}-kernelt`;
                 this.terminal.api.log(`Kernel terminal is now ${this.terminal.id}\n\n`);
                 
-                this.api.initializeFileSystem(true);
+                this.api.initializeFileSystem();
 
                 this.api.createServices();
                 for (let i in this.registeredServices) {
@@ -1341,6 +1358,13 @@ class SystemKernel {
                     const appFile = new AuroraONFSApplicationFile("ate", ate, this.fileSystem.id);
                     exec.api.addChild(appFile);
                 }
+
+                if (!this.fileSystem.api.getItemByPath("onfsRoot/exec/vaurora")) {
+                    const exec = this.fileSystem.api.getItemByPath("onfsRoot/exec");
+                    const aframe = this.api.createVAurora();
+                    const appFile = new AuroraONFSApplicationFile("vaurora", aframe, this.fileSystem.id);
+                    exec.api.addChild(appFile);
+                }
             }
         };
     }
@@ -1363,6 +1387,6 @@ class SystemLoader {
     }
 }
 
-const AuroraSystemKernel = new SystemKernel("Aurora", "0.2.0");
+const AuroraSystemKernel = new SystemKernel("Aurora", "0.3.0");
 const AuroraSystemLoader = new SystemLoader(AuroraSystemKernel, "AuroraSysLoader", "1.0.0");
 AuroraSystemLoader.api.boot();
