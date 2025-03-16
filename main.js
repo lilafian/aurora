@@ -13,6 +13,10 @@ class SystemTerminal {
                 document.body.appendChild(this.element);
                 document.addEventListener("keydown", this.handleKeyPress.bind(this));
             },
+            invisibleInit: () => {
+                this.element.className = "system-terminal";
+                document.addEventListener("keydown", this.handleKeyPress.bind(this));
+            },
             log: (msg, logToConsole = true) => {
                 this.element.innerText += msg;
                 this.element.scrollTop = this.element.scrollHeight;
@@ -717,11 +721,16 @@ class SystemKernel {
             },
             createShell: () => {
                 const auroraShell = new Application("AuroraShell", "0.1.0");
-                auroraShell.api.createExecutableFromFunction(async (process, services, argv) => {
-                    services.kterminals.api.destroy();
-                    services.graphicsmgrs.api.clearScreen();
-                    const term = new SystemTerminal(`AuroraShell-${process.pid}`);
-                    term.api.init();
+                auroraShell.api.createExecutableFromFunction(async (process, services, argv, terminal = null) => {
+                    let term;
+                    if (!terminal) {
+                        services.kterminals.api.destroy();
+                        services.graphicsmgrs.api.clearScreen();
+                        term = new SystemTerminal(`AuroraShell-${process.pid}`);
+                        term.api.init();
+                    } else {
+                        term = terminal;
+                    }
 
                     term.api.log(`Aurora Shell version ${process.application.version}\n`, false);
                     term.api.log("Use 'help' to display a list of commands\n", false);
@@ -928,7 +937,6 @@ class SystemKernel {
                                 const file = services.fsrws.api.getItemByPath(filePath);
                                 args.argv.splice(0, 2);
                                 const newContent = args.argv.join(" ");
-
                                 if (file !== null && file.type === "file") {
                                     file.api.appendContent(newContent);
                                 } else {
@@ -1074,7 +1082,7 @@ class SystemKernel {
 						let menuAppListYOffset = 0;
 						let menuAppListXOffset = 0;
 						for (let i in appList) {
-							const listEntry = services.graphicsmgrs.api.createTextualElement(15 + menuAppListXOffset, 15 + menuAppListYOffset, 20, "#ffffff", appList[i].name, "#00000000", menu);
+							const listEntry = services.graphicsmgrs.api.createTextualElement(15 + menuAppListXOffset, menuAppListYOffset, 20, "#ffffff", appList[i].name, "#00000000", menu);
 							listEntry.style.cursor = "pointer";
                             listEntry.style.fontFamily = "Ubuntu, sans-serif, monospace";
 							menuAppListYOffset += 20;
@@ -1100,7 +1108,7 @@ class SystemKernel {
 
                     let highestWinZIndex = 0;
                     process.deskapi = {
-                        createWindow: (title, content, sizeX = 500, sizeY = 400, posX = screenWidth / 2 - sizeX / 2, posY = screenWidth / 2 - sizeY) => {
+                        createWindow: (title, content, sizeX = 500, sizeY = 400, posX = screenWidth / 2 - sizeX / 2, posY = screenHeight / 2 - sizeY / 2) => {
                             const titlebar = document.createElement("div");
                             titlebar.style.width = "calc(100% - 6px)";
                             titlebar.style.height = `${screenHeight * 0.025 - 3}px`;
@@ -1144,6 +1152,9 @@ class SystemKernel {
 
 
                             closeButton.addEventListener("click", () => {
+                                if (newWindow.api && newWindow.api.onclose) {
+                                    newWindow.api.onclose();
+                                }
                                 newWindow.remove();
                             });
                             titlebar.addEventListener("mousedown", () => {
@@ -1243,7 +1254,7 @@ class SystemKernel {
                             logoContainerOuter.appendChild(logoContainerInner);
                             windowContent.appendChild(logoContainerOuter);
 
-                            deskapi.createWindow("Welcome to Wingman", windowContent, 600, 500); 
+                            deskapi.createWindow("Welcome to Wingman", windowContent, 600, 180); 
                         });
 
                         const execDir = services.fsrws.api.getItemByPath("onfsRoot/exec");
@@ -1251,8 +1262,40 @@ class SystemKernel {
                         execDir.api.addChild(appFile);
                     }
                     const welcomeWingmanProcess = services.processmgrs.api.createProcess(welcomeWingman);
+                    setTimeout(() => {
+                        services.processmgrs.api.startProcess(welcomeWingmanProcess);
+                    }, 1500);
                 });
                 return wingman;
+            },
+            createAteTerminalEmulator: () => {
+                const ate = new Application("ate", "1.0.0");
+                ate.api.createExecutableFromFunction((process, services, argv) => {
+                    const deskproc = services.processmgrs.api.getDesktopEnvironmentProcess();
+                    const deskapi = deskproc.deskapi;
+                    
+                    const newTerm = new SystemTerminal(`ate-${process.pid}-term`);
+                    newTerm.api.invisibleInit();
+
+                    const termElement = document.createElement("div");
+                    termElement.style.backgroundColor = "black";
+                    termElement.appendChild(newTerm.element);
+
+                    const shellFile = services.fsrws.api.getItemByPath("onfsRoot/exec/AuroraShell");
+                    const shell = AuroraONFSApplicationFile.getApplicationFromFile(shellFile);
+                    const shellProc = services.processmgrs.api.createProcess(shell);
+                    services.processmgrs.api.startProcess(shellProc, [], newTerm);
+
+                    const sSizeX = services.graphicsmgrs.api.getScreenWidth();
+                    const sSizeY = services.graphicsmgrs.api.getScreenHeight();
+                    const win = deskapi.createWindow("ate", termElement, sSizeX * 0.75, sSizeY * 0.75);
+                    win.api = {
+                        onclose: () => {
+                            newTerm.api.destroy();
+                        }
+                    }
+                });
+                return ate;
             },
             init: async (terminal) => {
                 this.terminal = terminal;
@@ -1292,6 +1335,12 @@ class SystemKernel {
                     exec.api.addChild(appFile);
                 }
 
+                if (!this.fileSystem.api.getItemByPath("onfsRoot/exec/ate")) {
+                    const exec = this.fileSystem.api.getItemByPath("onfsRoot/exec");
+                    const ate = this.api.createAteTerminalEmulator();
+                    const appFile = new AuroraONFSApplicationFile("ate", ate, this.fileSystem.id);
+                    exec.api.addChild(appFile);
+                }
             }
         };
     }
@@ -1317,4 +1366,3 @@ class SystemLoader {
 const AuroraSystemKernel = new SystemKernel("Aurora", "0.2.0");
 const AuroraSystemLoader = new SystemLoader(AuroraSystemKernel, "AuroraSysLoader", "1.0.0");
 AuroraSystemLoader.api.boot();
-
